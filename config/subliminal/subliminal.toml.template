@@ -11,7 +11,9 @@ username = "<USERNAME>"
 password = "<PASSWORD>"
 
 [download]
-provider = ["opensubtitlescom", "addic7ed", "opensubtitles", "podnapisi", "tvsubtitles"]
+# Provider priority (free-only defaults): OpenSubtitles.com → Podnapisi → TVSubtitles
+# Addic7ed is free but requires an account; enable after adding credentials.
+provider = ["opensubtitlescom", "podnapisi", "tvsubtitles"]
 refiner = ["metadata", "hash"]
 language = ["en"]
 foreign_only = false

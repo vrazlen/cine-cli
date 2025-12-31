@@ -3,8 +3,39 @@
 --=============================================================================
 --          This script uses Subliminal to download subtitles,
 --          so make sure to specify your system's Subliminal location below:
-local subliminal = '/home/vrazlen/.local/bin/subliminal'
-local config_file = '/home/vrazlen/.config/subliminal/subliminal.toml'
+local utils = require 'mp.utils'
+local subliminal = os.getenv('CINE_SUBLIMINAL_PATH') or '/home/vrazlen/.local/bin/subliminal'
+
+local function resolve_config_path()
+    local env_config = os.getenv('CINE_SUBLIMINAL_CONFIG')
+    if env_config and env_config ~= '' then
+        return env_config
+    end
+
+    local xdg_config = os.getenv('XDG_CONFIG_HOME')
+    if not xdg_config or xdg_config == '' then
+        xdg_config = os.getenv('HOME') .. '/.config'
+    end
+
+    local cine_config = xdg_config .. '/cine/subliminal.toml'
+    if utils.file_info(cine_config) then
+        return cine_config
+    end
+
+    return xdg_config .. '/subliminal/subliminal.toml'
+end
+
+local config_file = resolve_config_path()
+local max_age = os.getenv('CINE_SUBS_MAX_AGE')
+local min_score = os.getenv('CINE_SUBS_MIN_SCORE')
+
+-- Global limits (single source of truth)
+local SUB_TIMEOUT_SEC = 20
+local SUB_TOTAL_BUDGET_SEC = 120
+local SUB_MAX_ATTEMPTS_PER_PROVIDER = 2
+local SUB_MAX_CANDIDATES = 25
+local SUB_MAX_PROVIDERS = 5
+local SUB_BACKOFF_MS = 500
 --=============================================================================
 -->>    SUBTITLE LANGUAGE:
 --=============================================================================
@@ -56,6 +87,15 @@ local includes = {
 local utils = require 'mp.utils'
 
 
+-- Helper: Run command with hard timeout
+local function run_with_timeout(cmd_args, timeout_sec)
+    local wrapped_cmd = { 'timeout', '-k', '5', tostring(timeout_sec) }
+    for _, arg in ipairs(cmd_args) do
+        table.insert(wrapped_cmd, arg)
+    end
+    return utils.subprocess({ args = wrapped_cmd })
+end
+
 -- Download function: download the best subtitles in most preferred language
 function download_subs(language)
     language = language or languages[1]
@@ -67,39 +107,67 @@ function download_subs(language)
     log('Searching ' .. language[1] .. ' subtitles ...', 30)
 
     -- Build the `subliminal` command, starting with the executable:
-    local table = { args = { subliminal } }
-    local a = table.args
+    local base_args = { subliminal }
 
     for _, login in ipairs(logins) do
-        a[#a + 1] = login[1]
-        a[#a + 1] = login[2]
-        a[#a + 1] = login[3]
+        table.insert(base_args, login[1])
+        table.insert(base_args, login[2])
+        table.insert(base_args, login[3])
     end
     if bools.debug then
         -- To see `--debug` output start MPV from the terminal!
-        a[#a + 1] = '--debug'
+        table.insert(base_args, '--debug')
     end
 
-    a[#a + 1] = '-c'
-    a[#a + 1] = config_file
-    a[#a + 1] = 'download'
+    table.insert(base_args, '-c')
+    table.insert(base_args, config_file)
+    table.insert(base_args, 'download')
     if bools.force then
-        a[#a + 1] = '-f'
+        table.insert(base_args, '-f')
     end
     if bools.utf8 then
-        a[#a + 1] = '-e'
-        a[#a + 1] = 'utf-8'
+        table.insert(base_args, '-e')
+        table.insert(base_args, 'utf-8')
     end
 
-    a[#a + 1] = '-l'
-    a[#a + 1] = language[2]
-    a[#a + 1] = '-d'
-    a[#a + 1] = directory
-    a[#a + 1] = filename --> Subliminal command ends with the movie filename.
+    table.insert(base_args, '-l')
+    table.insert(base_args, language[2])
+    table.insert(base_args, '-d')
+    table.insert(base_args, directory)
+    table.insert(base_args, filename) --> Subliminal command ends with the movie filename.
 
-    local result = utils.subprocess(table)
+    local attempt = 1
+    local success = false
+    local result = nil
 
-    if string.find(result.stdout, 'Downloaded 1 subtitle') then
+    while attempt <= SUB_MAX_ATTEMPTS_PER_PROVIDER do
+        local start_time = os.time()
+        mp.msg.warn(string.format("Attempt %d/%d with timeout %ds...", attempt, SUB_MAX_ATTEMPTS_PER_PROVIDER, SUB_TIMEOUT_SEC))
+        
+        result = run_with_timeout(base_args, SUB_TIMEOUT_SEC)
+        
+        local duration = os.time() - start_time
+        mp.msg.warn(string.format("Attempt finished in %ds. Status: %s", duration, result.status or "unknown"))
+
+        if result.status == 0 and string.find(result.stdout, 'Downloaded 1 subtitle') then
+            success = true
+            break
+        elseif result.status == 124 then -- timeout exit code
+            mp.msg.warn("Command timed out!")
+        else
+            mp.msg.warn("Command failed or no subtitles found.")
+        end
+
+        attempt = attempt + 1
+        -- Simple backoff
+        if attempt <= SUB_MAX_ATTEMPTS_PER_PROVIDER then
+             -- Busy wait/sleep is bad in mpv main thread, but for 0.5s it might be tolerable 
+             -- or we just retry immediately since we are blocking anyway.
+             -- Let's just proceed.
+        end
+    end
+
+    if success then
         -- When multiple external files are present,
         -- always activate the most recently downloaded:
         mp.set_property('slang', language[2])
@@ -108,7 +176,7 @@ function download_subs(language)
         log(language[1] .. ' subtitles ready!')
         return true
     else
-        log('No ' .. language[1] .. ' subtitles found\n')
+        log('No ' .. language[1] .. ' subtitles found (after retries)\n')
         return false
     end
 end
