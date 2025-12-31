@@ -1,0 +1,21 @@
+[default]
+cache_dir = "~/.cache/subliminal"
+
+[provider.opensubtitlescom]
+username = "<USERNAME>"
+password = "<PASSWORD>"
+apikey = "<API_KEY>"
+
+[provider.addic7ed]
+username = "<USERNAME>"
+password = "<PASSWORD>"
+
+[download]
+provider = ["opensubtitlescom", "addic7ed", "opensubtitles", "podnapisi", "tvsubtitles"]
+refiner = ["metadata", "hash"]
+language = ["en"]
+foreign_only = false
+encoding = "utf-8"
+min_score = 50
+archives = true
+verbose = 2

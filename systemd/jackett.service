@@ -1,0 +1,11 @@
+[Unit]
+Description=Jackett service (user)
+After=network.target
+
+[Service]
+ExecStart=/opt/Jackett/jackett --NoUpdates --NoRestart
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,303 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+LIBRARY_BASE="${HOME}/Videos/Library"
+DOWNLOAD_DIR="${LIBRARY_BASE}/Incoming"
+JACKETT_CONFIG="${HOME}/.config/Jackett/ServerConfig.json"
+JACKETT_URL="http://127.0.0.1:9117"
+HISTORY_FILE="${HOME}/.local/share/cine-cli/history.jsonl"
+LEGACY_HISTORY="${HOME}/.local/share/media/history.jsonl"
+
+require_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "$1 is required but not installed"
+    exit 1
+  fi
+}
+
+require_cmd jq
+require_cmd fzf
+require_cmd curl
+require_cmd mpv
+require_cmd aria2c
+require_cmd python3
+
+if [ ! -f "$JACKETT_CONFIG" ]; then
+  echo "Jackett config not found: $JACKETT_CONFIG"
+  exit 1
+fi
+
+API_KEY=$(jq -r '.APIKey // empty' "$JACKETT_CONFIG")
+if [ -z "$API_KEY" ]; then
+  echo "Jackett API key not found"
+  exit 1
+fi
+
+mkdir -p "$(dirname "$HISTORY_FILE")" "$DOWNLOAD_DIR"
+if [ ! -s "$HISTORY_FILE" ] && [ -s "$LEGACY_HISTORY" ]; then
+  cp "$LEGACY_HISTORY" "$HISTORY_FILE"
+fi
+
+run_stream() {
+  local magnet="$1"
+  local title="$2"
+  local start_pos="${3:-}"
+  local socket="/tmp/mpv-cine-${RANDOM}.sock"
+
+  local start_args=()
+  if [ -n "$start_pos" ]; then
+    start_args=("--start=${start_pos}")
+  fi
+
+  mpv --input-ipc-server="$socket" --force-seekable=yes "${start_args[@]}" "$magnet" &
+  local mpv_pid=$!
+
+  MEDIA_TITLE="$title" MEDIA_MAGNET="$magnet" MEDIA_SOCKET="$socket" MEDIA_PID="$mpv_pid" python3 - <<'PY' &
+import json
+import os
+import socket
+import time
+
+history_file = os.path.expanduser("~/.local/share/cine-cli/history.jsonl")
+magnet = os.environ.get("MEDIA_MAGNET", "")
+title = os.environ.get("MEDIA_TITLE", "unknown")
+socket_path = os.environ.get("MEDIA_SOCKET", "")
+try:
+    pid = int(os.environ.get("MEDIA_PID", "0"))
+except ValueError:
+    pid = 0
+
+if not socket_path or pid == 0:
+    raise SystemExit(0)
+
+for _ in range(100):
+    if os.path.exists(socket_path):
+        break
+    time.sleep(0.1)
+
+try:
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.connect(socket_path)
+    fileobj = sock.makefile("r")
+except Exception:
+    raise SystemExit(0)
+
+last_pos = 0.0
+
+def get_prop(name):
+    try:
+        cmd = {"command": ["get_property", name], "request_id": 1}
+        sock.sendall((json.dumps(cmd) + "\n").encode())
+        line = fileobj.readline()
+        if not line:
+            return None
+        data = json.loads(line)
+        return data.get("data")
+    except Exception:
+        return None
+
+while True:
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        break
+    pos = get_prop("time-pos")
+    if isinstance(pos, (int, float)) and pos > 0:
+        last_pos = float(pos)
+    time.sleep(2)
+
+try:
+    sock.close()
+except Exception:
+    pass
+
+if magnet and last_pos > 0:
+    entry = {
+        "title": title,
+        "magnet": magnet,
+        "pos": int(last_pos),
+        "ts": int(time.time())
+    }
+    os.makedirs(os.path.dirname(history_file), exist_ok=True)
+    with open(history_file, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+PY
+
+  wait "$mpv_pid"
+}
+
+action=""
+query="${*:-}"
+if [ -z "$query" ]; then
+  read -r -p "Action [n=New, r=Resume]: " action
+  action=${action:-n}
+else
+  action="n"
+fi
+
+if [ "$action" = "r" ] || [ "$action" = "R" ]; then
+  if [ ! -f "$HISTORY_FILE" ] || [ ! -s "$HISTORY_FILE" ]; then
+    echo "No history found"
+    exit 1
+  fi
+
+  history_entries=$(python3 - <<'PY'
+import json
+import os
+
+history_file = os.path.expanduser("~/.local/share/cine-cli/history.jsonl")
+entries = []
+with open(history_file, "r", encoding="utf-8") as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+        except Exception:
+            continue
+        ts = data.get("ts", 0)
+        title = data.get("title", "unknown")
+        magnet = data.get("magnet", "")
+        pos = data.get("pos", 0)
+        if magnet:
+            entries.append((ts, title, magnet, pos))
+
+entries.sort(reverse=True)
+for ts, title, magnet, pos in entries[:200]:
+    mm = int(pos) // 60
+    ss = int(pos) % 60
+    print(f"{title} ({mm:02d}:{ss:02d})\t{magnet}\t{pos}")
+PY
+)
+
+  selection=$(printf "%s\n" "$history_entries" | fzf --with-nth=1 --delimiter="\t" --prompt="Resume: ")
+  magnet=$(printf "%s" "$selection" | awk -F"\t" '{print $2}')
+  pos=$(printf "%s" "$selection" | awk -F"\t" '{print $3}')
+
+  if [ -z "$magnet" ]; then
+    echo "No selection"
+    exit 1
+  fi
+
+  run_stream "$magnet" "Resume" "$pos"
+  exit 0
+fi
+
+if [ -z "$query" ]; then
+  read -r -p "Search query: " query
+fi
+
+if [ -z "$query" ]; then
+  echo "No search query provided"
+  exit 1
+fi
+
+json=$(curl -sG \
+  --data-urlencode "Query=$query" \
+  --data-urlencode "apikey=$API_KEY" \
+  "$JACKETT_URL/api/v2.0/indexers/all/results")
+
+read -r -p "Quality filter [1080/720/4k/any] (default 1080): " quality
+quality=${quality:-1080}
+quality_re=""
+case "$quality" in
+  4k|2160p) quality_re="2160p|4k" ;;
+  1080) quality_re="1080p" ;;
+  720) quality_re="720p" ;;
+  any) quality_re="" ;;
+  *) quality_re="1080p" ;;
+esac
+
+jq_filter='.Results
+| map(select(.MagnetUri != null and .MagnetUri != ""))
+| map(.Title as $t | .QualityScore = (if ($t|test("2160p|4k";"i")) then 4 elif ($t|test("1080p";"i")) then 3 elif ($t|test("720p";"i")) then 2 elif ($t|test("480p";"i")) then 1 else 0 end))
+| (if $quality_re == "" then . else map(select(.Title | test($quality_re;"i"))) end)
+| sort_by(.QualityScore, (.Seeders|tonumber))
+| reverse
+| .[]
+| [.Title, (.Tracker // ""), (.Seeders | tostring), .MagnetUri]
+| @tsv'
+
+entries=$(printf "%s" "$json" | jq -r --arg quality_re "$quality_re" "$jq_filter")
+if [ -z "$entries" ]; then
+  if [ "$quality" != "any" ]; then
+    echo "No results for quality filter '$quality'. Falling back to any."
+    entries=$(printf "%s" "$json" | jq -r --arg quality_re "" "$jq_filter")
+  fi
+fi
+
+if [ -z "$entries" ]; then
+  echo "No magnet results found"
+  exit 1
+fi
+
+selection=$(printf "%s\n" "$entries" | awk -F"\t" '{print $1 " [" $2 "] " $3 " seeds\t" $4}' | fzf --with-nth=1 --delimiter="\t" --prompt="Select: ")
+magnet=$(printf "%s" "$selection" | awk -F"\t" '{print $2}')
+selected_title=$(printf "%s" "$selection" | awk -F"\t" '{print $1}')
+
+if [ -z "$magnet" ]; then
+  echo "No selection"
+  exit 1
+fi
+
+read -r -p "Stream or Download? [s/D]: " mode
+mode=${mode:-s}
+
+case "$mode" in
+  s|S)
+    run_stream "$magnet" "$selected_title"
+    ;;
+  d|D)
+    start_epoch=$(date +%s)
+    aria2c --check-integrity=false --follow-torrent=mem --seed-time=0 --max-connection-per-server=16 --bt-max-peers=200 --dir "$DOWNLOAD_DIR" "$magnet"
+    START_EPOCH="$start_epoch" python3 - <<'PY'
+import os
+import re
+import shutil
+import time
+
+base = os.path.expanduser("~/Videos/Library")
+incoming = os.path.join(base, "Incoming")
+movies = os.path.join(base, "Movies")
+series = os.path.join(base, "Series")
+start_epoch = int(os.environ.get("START_EPOCH", "0"))
+
+os.makedirs(movies, exist_ok=True)
+os.makedirs(series, exist_ok=True)
+
+candidates = []
+for name in os.listdir(incoming):
+    path = os.path.join(incoming, name)
+    try:
+        mtime = int(os.path.getmtime(path))
+    except OSError:
+        continue
+    if mtime >= start_epoch:
+        candidates.append((mtime, path))
+
+if not candidates:
+    raise SystemExit(0)
+
+candidates.sort(reverse=True)
+path = candidates[0][1]
+name = os.path.basename(path)
+
+series_re = re.compile(r"(S\d{1,2}E\d{1,2})|(Season\s*\d+)", re.IGNORECASE)
+
+dest_base = series if series_re.search(name) else movies
+
+dest = os.path.join(dest_base, name)
+if os.path.exists(dest):
+    ts = int(time.time())
+    dest = os.path.join(dest_base, f"{name}-{ts}")
+
+shutil.move(path, dest)
+print(f"Moved to: {dest}")
+PY
+    ;;
+  *)
+    echo "Invalid choice"
+    exit 1
+    ;;
+esac
