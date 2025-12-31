@@ -136,7 +136,7 @@
   - Owner Agent: Sisyphus
   - Tooling: bash, todowrite
   - Dependencies: Tasks 4.1-6.1
-- [ ] Task 6.3: Push final product
+- [x] Task 6.3: Push final product
   - Objective: Push clean commits to remote.
   - Acceptance Criteria (requirements: free-only indexers; interactive-first UX; English subtitles with OpenSubtitles.com priority + auto-fallback; unified XDG-style config; clear readable logs): Remote updated; final status reported.
   - Owner Agent: Sisyphus
