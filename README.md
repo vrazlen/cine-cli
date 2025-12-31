@@ -1,38 +1,67 @@
 # Cine-CLI
 
-Fast CLI workflow for streaming/downloading torrents with resume and auto-subtitles.
+Fast, interactive CLI workflow for streaming/downloading torrents with resume capabilities and robust auto-subtitles.
 
-## Commands
-- Run: `cine`
-- Menu: `n` (New), `r` (Resume)
+## Features
+- **Interactive First**: Frictionless search and selection via `fzf`.
+- **Resume**: Automatically tracks playback position; resume instantly with `cine -r`.
+- **Smart Sorting**: Ranks results by quality (4K > 1080p > 720p) and seeder count.
+- **Auto-Subtitles**: Prioritizes OpenSubtitles.com with robust free fallback providers (Podnapisi, TVSubtitles).
+- **Free-Only**: Designed for public/free trackers; no paid subscriptions required.
+- **XDG Compliant**: Configs in `~/.config`, data in `~/.local/share`.
 
-## Workflow
-1. Search query
-2. Quality filter: `1080`, `720`, `4k`, `any` (default: 1080)
-3. Select result (ranked by quality + seeders)
-4. Choose `s` (Stream) or `d` (Download)
+## Usage
 
-## Library Layout
-- Incoming: `~/Videos/Library/Incoming`
-- Movies: `~/Videos/Library/Movies`
-- Series: `~/Videos/Library/Series`
+**Interactive Search:**
+```bash
+cine
+# or skip the prompt:
+cine "Blade Runner"
+```
 
-## Resume
+**Resume Playback:**
+```bash
+cine -r
+# or
+cine --resume
+```
+
+**During Selection:**
+- `Enter`: Stream
+- `Ctrl+D`: Download
+- `Ctrl+Y`: Copy Magnet Link
+
+## Configuration
+
+**Environment Variables** (override defaults):
+- `INDEXER_PROVIDER`: `jackett` (default)
+- `INDEXER_BASE_URL`: URL to Jackett/Prowlarr (default: `http://127.0.0.1:9117`)
+- `INDEXER_API_KEY`: Your API Key (auto-detected from `~/.config/Jackett/ServerConfig.json` if available)
+- `INDEXER_TIMEOUT`: Search timeout in seconds (default: 15)
+
+**Files:**
+- Config: `~/.config/cine/` (or `~/.config/subliminal/`)
 - History: `~/.local/share/cine-cli/history.jsonl`
-- Uses MPV resume and a custom position log.
+- Library: `~/Videos/Library/{Movies,Series}`
 
 ## Subtitles
-- Config: `~/.config/subliminal/subliminal.toml`
-- Template: `config/subliminal/subliminal.toml.template`
+Uses `subliminal` with a configured provider chain:
+1. **OpenSubtitles.com** (Primary, requires free API key)
+2. **Podnapisi** (Free fallback)
+3. **TVSubtitles** (Free fallback for series)
 
-## Services
-- Jackett user service: `systemd/jackett.service`
+MPV Hotkeys:
+- `b`: Download English subs (Primary)
+- `n`: Download Secondary subs
 
-## Install
-- Symlink configs to your home:
-  - `~/.config/mpv/mpv.conf`
-  - `~/.config/mpv/scripts/autosub.lua`
-  - `~/.config/mpv/script-opts/webtorrent.conf`
-- Place your real Subliminal config in `~/.config/subliminal/subliminal.toml`
-- Enable Jackett:
-  - `systemctl --user enable --now jackett.service`
+## Installation
+1. **Dependencies**: `mpv`, `aria2`, `jq`, `fzf`, `python3`, `curl`, `subliminal`
+2. **Services**: Ensure Jackett is running (`systemctl --user enable --now jackett.service`).
+3. **Setup**:
+   ```bash
+   # Symlink configs
+   ln -s $(pwd)/config/mpv ~/.config/mpv
+   mkdir -p ~/.config/subliminal
+   cp config/subliminal/subliminal.toml.template ~/.config/subliminal/subliminal.toml
+   # Edit subliminal.toml with your OpenSubtitles.com credentials
+   ```

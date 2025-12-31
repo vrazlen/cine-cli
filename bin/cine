@@ -3,9 +3,12 @@ set -euo pipefail
 
 LIBRARY_BASE="${HOME}/Videos/Library"
 DOWNLOAD_DIR="${LIBRARY_BASE}/Incoming"
-JACKETT_CONFIG="${HOME}/.config/Jackett/ServerConfig.json"
+XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+
+JACKETT_CONFIG="${XDG_CONFIG_HOME}/Jackett/ServerConfig.json"
 JACKETT_URL="http://127.0.0.1:9117"
-HISTORY_FILE="${HOME}/.local/share/cine-cli/history.jsonl"
+HISTORY_FILE="${XDG_DATA_HOME}/cine-cli/history.jsonl"
 LEGACY_HISTORY="${HOME}/.local/share/media/history.jsonl"
 
 INDEXER_PROVIDER="${INDEXER_PROVIDER:-jackett}"
@@ -29,6 +32,35 @@ require_cmd curl
 require_cmd mpv
 require_cmd aria2c
 require_cmd python3
+
+log() {
+  local level="$1"
+  shift
+  echo "[$level] $*" >&2
+}
+
+fetch_url_with_retry() {
+  local url="${@: -1}"
+  local args=("${@:1:$#-1}")
+  local retries=2
+  local delay=1
+  local count=0
+  local output
+
+  while [ $count -le $retries ]; do
+    if output=$(curl -fsSL "${args[@]}" "$url"); then
+      echo "$output"
+      return 0
+    fi
+    count=$((count + 1))
+    if [ $count -le $retries ]; then
+      log "WARN" "Request failed. Retrying in ${delay}s..."
+      sleep "$delay"
+    fi
+  done
+  log "ERROR" "Failed to fetch URL after $retries retries: $url"
+  return 1
+}
 
 if [ -z "$INDEXER_SEARCH_URL" ]; then
   INDEXER_SEARCH_URL="$INDEXER_BASE_URL/api/v2.0/indexers/all/results"
@@ -62,13 +94,14 @@ run_stream() {
   mpv --input-ipc-server="$socket" --force-seekable=yes "${start_args[@]}" "$magnet" &
   local mpv_pid=$!
 
-  MEDIA_TITLE="$title" MEDIA_MAGNET="$magnet" MEDIA_SOCKET="$socket" MEDIA_PID="$mpv_pid" python3 - <<'PY' &
+  MEDIA_TITLE="$title" MEDIA_MAGNET="$magnet" MEDIA_SOCKET="$socket" MEDIA_PID="$mpv_pid" XDG_DATA_HOME="$XDG_DATA_HOME" python3 - <<'PY' &
 import json
 import os
 import socket
 import time
 
-history_file = os.path.expanduser("~/.local/share/cine-cli/history.jsonl")
+xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
+history_file = os.path.join(xdg_data, "cine-cli/history.jsonl")
 magnet = os.environ.get("MEDIA_MAGNET", "")
 title = os.environ.get("MEDIA_TITLE", "unknown")
 socket_path = os.environ.get("MEDIA_SOCKET", "")
@@ -245,11 +278,12 @@ if [ "$action" = "r" ] || [ "$action" = "R" ]; then
     exit 1
   fi
 
-  history_entries=$(python3 - <<'PY'
+  history_entries=$(XDG_DATA_HOME="$XDG_DATA_HOME" python3 - <<'PY'
 import json
 import os
 
-history_file = os.path.expanduser("~/.local/share/cine-cli/history.jsonl")
+xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
+history_file = os.path.join(xdg_data, "cine-cli/history.jsonl")
 entries = []
 with open(history_file, "r", encoding="utf-8") as f:
     for line in f:
@@ -334,7 +368,17 @@ while true; do
     done
   fi
 
-  json=$(curl "${curl_args[@]}" "$INDEXER_SEARCH_URL")
+  json=$(fetch_url_with_retry "${curl_args[@]}" "$INDEXER_SEARCH_URL") || continue
+
+  if [ -z "$json" ]; then
+    log "ERROR" "Empty response from indexer"
+    continue
+  fi
+
+  if ! echo "$json" | jq empty >/dev/null 2>&1; then
+    log "ERROR" "Invalid JSON received from indexer"
+    continue
+  fi
 
   entries=$(printf "%s" "$json" | jq -r "$jq_filter")
   if [ -z "$entries" ]; then

@@ -104,19 +104,19 @@
   - Dependencies: Task 3.1
 
 ## Epic 5: Data Hardening
-- [ ] Task 5.1: Input validation and error handling
+- [x] Task 5.1: Input validation and error handling
   - Objective: Validate inputs, add safe error handling and retries.
   - Acceptance Criteria (requirements: free-only indexers; interactive-first UX; English subtitles with OpenSubtitles.com priority + auto-fallback; unified XDG-style config; clear readable logs): No obvious crash paths; meaningful errors.
   - Owner Agent: Sisyphus
   - Tooling: read, edit, lsp_diagnostics
   - Dependencies: Tasks 4.1-4.3
-- [ ] Task 5.2: Config persistence safeguards
+- [x] Task 5.2: Config persistence safeguards
   - Objective: Ensure config stored safely and portably.
   - Acceptance Criteria (requirements: free-only indexers; interactive-first UX; English subtitles with OpenSubtitles.com priority + auto-fallback; unified XDG-style config; clear readable logs): Config behavior documented and tested.
   - Owner Agent: Sisyphus
   - Tooling: read, edit, lsp_diagnostics
   - Dependencies: Tasks 4.1-4.3
-- [ ] Task 5.3: Tests and logging
+- [x] Task 5.3: Tests and logging
   - Objective: Add/adjust tests and logging defaults.
   - Acceptance Criteria (requirements: free-only indexers; interactive-first UX; English subtitles with OpenSubtitles.com priority + auto-fallback; unified XDG-style config; clear readable logs): Tests pass; logging is actionable.
   - Owner Agent: Sisyphus
@@ -124,13 +124,13 @@
   - Dependencies: Tasks 4.1-4.3
 
 ## Epic 6: Finalization
-- [ ] Task 6.1: Docs update
+- [x] Task 6.1: Docs update
   - Objective: Update README and usage examples.
   - Acceptance Criteria (requirements: free-only indexers; interactive-first UX; English subtitles with OpenSubtitles.com priority + auto-fallback; unified XDG-style config; clear readable logs): README reflects new workflows.
   - Owner Agent: Sisyphus
   - Tooling: read, edit
   - Dependencies: Tasks 4.1-5.3
-- [ ] Task 6.2: Verify and clean history
+- [x] Task 6.2: Verify and clean history
   - Objective: Ensure TODOs complete, tests pass, clean git history.
   - Acceptance Criteria (requirements: free-only indexers; interactive-first UX; English subtitles with OpenSubtitles.com priority + auto-fallback; unified XDG-style config; clear readable logs): All tasks checked; clean working tree.
   - Owner Agent: Sisyphus
